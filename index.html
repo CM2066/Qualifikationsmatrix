@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qualifikationsmatrix - Lokal</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/lucide-static/0.321.0/lucide.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .lucide { display: inline-block; width: 1em; height: 1em; vertical-align: middle; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        // Icons als einfache SVG-Komponenten (da Lucide-React im CDN anders geladen wird)
+        const Icon = ({ name, className = "" }) => (
+            <i data-lucide={name} className={`lucide-${name} ${className}`}></i>
+        );
+
+        const QUALI_LEVELS = {
+            0: { value: 0, label: 'Keine Kenntnisse', color: 'bg-white', textColor: 'text-gray-300', borderColor: 'border-gray-200' },
+            1: { value: 1, label: 'In Einarbeitung', color: 'bg-yellow-100', textColor: 'text-yellow-800', borderColor: 'border-yellow-300' },
+            2: { value: 2, label: 'Selbstständig', color: 'bg-green-100', textColor: 'text-green-800', borderColor: 'border-green-400' },
+            3: { value: 3, label: 'Experte / Ausbilder', color: 'bg-blue-100', textColor: 'text-blue-800', borderColor: 'border-blue-400' }
+        };
+
+        const SHIFTS = ['1', '2', '3', '4'];
+        const DEFAULT_MACHINES = ['Maschine 1', 'Maschine 2', 'Maschine 3', 'Maschine 4'];
+
+        const generateInitialData = () => {
+            const data = [];
+            let idCounter = 1;
+            SHIFTS.forEach(shift => {
+                for (let i = 1; i <= 6; i++) {
+                    data.push({
+                        id: idCounter++,
+                        name: `Mitarbeiter ${shift}.${i}`,
+                        shift: shift,
+                        note: '',
+                        qualis: { 0: 0, 1: 0, 2: 0, 3: 0 }
+                    });
+                }
+            });
+            return data;
+        };
+
+        function App() {
+            const [employees, setEmployees] = useState(() => {
+                const saved = localStorage.getItem('quali_matrix_emps');
+                return saved ? JSON.parse(saved) : generateInitialData();
+            });
+
+            const [machines, setMachines] = useState(() => {
+                const saved = localStorage.getItem('quali_matrix_machines');
+                return saved ? JSON.parse(saved) : DEFAULT_MACHINES;
+            });
+
+            const [activeShiftFilter, setActiveShiftFilter] = useState('Alle');
+            const [isEditMode, setIsEditMode] = useState(false);
+
+            useEffect(() => {
+                localStorage.setItem('quali_matrix_emps', JSON.stringify(employees));
+                localStorage.setItem('quali_matrix_machines', JSON.stringify(machines));
+                // Lucide Icons nach Render initialisieren
+                if (window.lucide) window.lucide.createIcons();
+            }, [employees, machines, isEditMode, activeShiftFilter]);
+
+            const toggleQuali = (empId, machineIdx) => {
+                if (!isEditMode) return;
+                setEmployees(prev => prev.map(emp => {
+                    if (emp.id === empId) {
+                        const currentLevel = emp.qualis[machineIdx] || 0;
+                        const nextLevel = (currentLevel + 1) % 4;
+                        return { ...emp, qualis: { ...emp.qualis, [machineIdx]: nextLevel } };
+                    }
+                    return emp;
+                }));
+            };
+
+            const handleNameChange = (id, newName) => {
+                setEmployees(prev => prev.map(emp => emp.id === id ? { ...emp, name: newName } : emp));
+            };
+
+            const handleNoteChange = (id, newNote) => {
+                setEmployees(prev => prev.map(emp => emp.id === id ? { ...emp, note: newNote } : emp));
+            };
+
+            const handleMachineNameChange = (idx, newName) => {
+                const updatedMachines = [...machines];
+                updatedMachines[idx] = newName;
+                setMachines(updatedMachines);
+            };
+
+            const resetData = () => {
+                if (window.confirm("Alle Daten löschen?")) {
+                    setEmployees(generateInitialData());
+                    setMachines(DEFAULT_MACHINES);
+                }
+            };
+
+            const exportJSON = () => {
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ employees, machines }));
+                const downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.setAttribute("href", dataStr);
+                downloadAnchorNode.setAttribute("download", "matrix_export.json");
+                document.body.appendChild(downloadAnchorNode);
+                downloadAnchorNode.click();
+                downloadAnchorNode.remove();
+            };
+
+            const filteredEmployees = useMemo(() => {
+                if (activeShiftFilter === 'Alle') return employees;
+                return employees.filter(emp => emp.shift === activeShiftFilter);
+            }, [employees, activeShiftFilter]);
+
+            const coverageStats = useMemo(() => {
+                const stats = {};
+                const shiftsToEvaluate = activeShiftFilter === 'Alle' ? SHIFTS : [activeShiftFilter];
+                shiftsToEvaluate.forEach(shift => {
+                    stats[shift] = {};
+                    machines.forEach((machineName, idx) => {
+                        const shiftEmps = employees.filter(e => e.shift === shift);
+                        const independent = shiftEmps.filter(e => (e.qualis[idx] || 0) >= 2).length;
+                        stats[shift][machineName] = { independent, isCovered: independent >= 1 };
+                    });
+                });
+                return stats;
+            }, [employees, activeShiftFilter, machines]);
+
+            return (
+                <div className="min-h-screen p-4 md:p-8">
+                    <div className="max-w-[1600px] mx-auto space-y-6">
+                        
+                        {/* Header */}
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                <div>
+                                    <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                                        Qualifikationsmatrix
+                                    </h1>
+                                    <p className="text-gray-500 text-sm">Offline-Version für Browser & Mobile</p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={exportJSON} className="px-3 py-2 bg-gray-100 rounded-lg text-sm font-semibold">Backup</button>
+                                    <button onClick={resetData} className="px-3 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-semibold">Reset</button>
+                                    <button onClick={() => setIsEditMode(!isEditMode)} className={`px-5 py-2 rounded-lg font-bold text-white shadow-sm ${isEditMode ? 'bg-green-600' : 'bg-blue-600'}`}>
+                                        {isEditMode ? 'Speichern' : 'Bearbeiten'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Filter */}
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex gap-2 overflow-x-auto">
+                            <button onClick={() => setActiveShiftFilter('Alle')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${activeShiftFilter === 'Alle' ? 'bg-gray-800 text-white' : 'bg-gray-100'}`}>Alle</button>
+                            {SHIFTS.map(s => (
+                                <button key={s} onClick={() => setActiveShiftFilter(s)} className={`px-4 py-1.5 rounded-lg text-sm font-semibold ${activeShiftFilter === s ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>Schicht {s}</button>
+                            ))}
+                        </div>
+
+                        <div className="grid lg:grid-cols-4 gap-6">
+                            <div className="lg:col-span-3 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden overflow-x-auto">
+                                <table className="w-full text-left">
+                                    <thead>
+                                        <tr className="bg-gray-50 border-b border-gray-200 text-[11px] uppercase font-bold">
+                                            <th className="p-4 text-gray-600">Mitarbeiter</th>
+                                            <th className="p-4 text-gray-600 text-center">Schicht</th>
+                                            {machines.map((m, idx) => (
+                                                <th key={idx} className="p-4 text-gray-600 text-center">
+                                                    <input disabled={!isEditMode} value={m} onChange={(e) => handleMachineNameChange(idx, e.target.value)} className="bg-transparent border-none text-center w-full font-bold focus:ring-0" />
+                                                </th>
+                                            ))}
+                                            <th className="p-4 text-gray-600">Bemerkung</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {filteredEmployees.map((emp) => (
+                                            <tr key={emp.id} className="hover:bg-gray-50/50">
+                                                <td className="p-3">
+                                                    <input disabled={!isEditMode} value={emp.name} onChange={(e) => handleNameChange(emp.id, e.target.value)} className="bg-transparent border-none focus:ring-0 w-full font-medium" />
+                                                </td>
+                                                <td className="p-4 text-center">
+                                                    <span className="text-[10px] font-bold bg-gray-100 text-gray-500 px-2 py-1 rounded">S{emp.shift}</span>
+                                                </td>
+                                                {machines.map((_, mIdx) => {
+                                                    const level = emp.qualis[mIdx] || 0;
+                                                    const lData = QUALI_LEVELS[level];
+                                                    return (
+                                                        <td key={mIdx} className="p-2 text-center">
+                                                            <button onClick={() => toggleQuali(emp.id, mIdx)} disabled={!isEditMode} className={`w-9 h-9 mx-auto rounded-lg border-2 font-bold ${lData.color} ${lData.borderColor} ${lData.textColor}`}>
+                                                                {level > 0 ? level : ''}
+                                                            </button>
+                                                        </td>
+                                                    );
+                                                })}
+                                                <td className="p-3 text-xs italic text-gray-400">
+                                                    <input disabled={!isEditMode} value={emp.note || ''} onChange={(e) => handleNoteChange(emp.id, e.target.value)} className="bg-transparent border-none focus:ring-0 w-full" placeholder={isEditMode ? "Notiz..." : ""} />
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 h-fit sticky top-6">
+                                <h3 className="font-bold mb-4 border-b pb-2 uppercase text-xs tracking-wider text-gray-400">Abdeckung</h3>
+                                <div className="space-y-6">
+                                    {Object.entries(coverageStats).map(([shift, mStats]) => (
+                                        <div key={shift} className="space-y-2">
+                                            <h4 className="text-[10px] font-bold text-blue-600">Schicht {shift}</h4>
+                                            {Object.entries(mStats).map(([mName, stats]) => (
+                                                <div key={mName} className="flex justify-between text-xs">
+                                                    <span className="text-gray-600">{mName}</span>
+                                                    <span className={`font-bold ${stats.isCovered ? 'text-green-600' : 'text-red-600'}`}>
+                                                        {stats.isCovered ? stats.independent : 'Lücke'}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</body>
+</html>
